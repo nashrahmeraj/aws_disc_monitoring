@@ -2,14 +2,38 @@
 SLACK_URL="add your webhook url to send notification"
 MAX_CHECK_PERCENT=80
 INCREASE_PERCENT=20
+TAG_OF_INSTANCE="Sample"
+
+function checkForPartitionsOfGivenVolume() {
+  device_name=$1
+  
+  echo "proceeding to check for partitions for device: $1, dns: $2"
+  #get all the partition names  of each device name
+  partition_list=$(ssh -i "key.pem" ec2-user@$2 'sudo fdisk -l '$device_name' | grep '"$device_name"'' | awk '{ if(NR>1) print $1}')
+
+ IFS=$'\n' 
+ for partition in $partition_list
+ do
+	 echo "going to check utilization for partition: $partition"
+	 partition_utilized=$(ssh -i "key.pem" ec2-user@$2 'df -H '$partition'' | awk '{ if(NR>1) print $5}')
+         echo "partition utilized pecentage for partition: $partition is :"$partition_utilized 
+ done
+
+ 
+
+}
+
 
 function checkForEveryVolume(){
+
+ #call for partitions check
+ checkForPartitionsOfGivenVolume $5 $4 
  echo "checking for volume $1"
  instanceid=$2
  instance_name=$3
  dns=$4
  local disc_perc
- disc_perc=$(ssh -i "key.pem" ec2-user@$dns bash -x utilized_space1.sh $1)
+ disc_perc=$(ssh -i "key.pem" ec2-user@$dns bash -x utilized_space.sh $1)
 
  used_space_value="${disc_perc//%}"
 
@@ -81,10 +105,28 @@ function monitorInstance(){
   done
 }
 
+function monitorInstanceNew(){
+ instanceid=$1
+ instance_name=$2
+ dns=$(aws ec2 describe-instances --instance-ids $instanceid --query 'Reservations[].Instances[].PublicDnsName' --output text)
+
+ echo "inside function, values of instanceID: $instanceid, instance name: $instance_name, dns: $dns"
+ IFS=$'\n'
+ for vids in $(aws ec2 describe-volumes  --filters Name=attachment.instance-id,Values=$instanceid --query 'Volumes[*].[VolumeId, Attachments[*].Device | [0]]' --output text)
+  do
+	  IFS=$'\t'
+   volume_details=($vids)
+   device_name=${volume_details[1]} 
+   volume_id=${volume_details[0]}
+   checkForEveryVolume $volume_id $instanceid $instance_name $dns $device_name
+  done
+}
+
+
 
 #setting delimiter for reading the instances output 
  IFS=$'\n'
- for ids in $(aws ec2 describe-instances --filters "Name=tag:Type,Values=Sample" --query 'Reservations[*].Instances[*].[InstanceId, Tags[?Key==`Name`].Value | [0]]' --output text)
+ for ids in $(aws ec2 describe-instances --filters "Name=tag:Type,Values=$TAG_OF_INSTANCE" --query 'Reservations[*].Instances[*].[InstanceId, Tags[?Key==`Name`].Value | [0]]' --output text)
  do
   IFS=$'\t'
   instance_details=($ids)
@@ -93,7 +135,7 @@ function monitorInstance(){
   echo "Going to monitor the instance id: " $instanceid "with the instance name: " $instance_name
 
   echo "==============================START OF MONITORING . Instance Name: $instance_name ================================"
-  monitorInstance $instanceid $instance_name
+  monitorInstanceNew $instanceid $instance_name
   echo "================================ END of MONITORING . Instance Name: $instance_name  =============================="
  done
 
